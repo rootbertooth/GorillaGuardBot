@@ -1,0 +1,500 @@
+# Comando: /start_proof_verification
+async def start_proof_verification(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Starts periodic verification of proofs (restricted to admins).
+    """
+    chat_id = update.effective_chat.id
+    user = await context.bot.get_chat_member(chat_id, update.effective_user.id)
+
+    if user.status not in ["administrator", "creator"]:
+        await update.message.reply_text("❌ This command is restricted to administrators.")
+        return
+
+    current_jobs = context.job_queue.get_jobs_by_name("proof_verification")
+    if current_jobs:
+        await update.message.reply_text("🔄 Proof verification is already running.")
+        return
+
+    context.job_queue.run_repeating(periodic_proof_verification, interval=600, first=0, name="proof_verification")
+    await update.message.reply_text("✅ Proof verification has been started!")
+
+
+# Comando: /stop_proof_verification
+async def stop_proof_verification(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Stops periodic verification of proofs (restricted to admins).
+    """
+    chat_id = update.effective_chat.id
+    user = await context.bot.get_chat_member(chat_id, update.effective_user.id)
+
+    if user.status not in ["administrator", "creator"]:
+        await update.message.reply_text("❌ This command is restricted to administrators.")
+        return
+
+    jobs = context.job_queue.get_jobs_by_name("proof_verification")
+    for job in jobs:
+        job.schedule_removal()
+
+    await update.message.reply_text("✅ Proof verification has been stopped!")
+
+
+# Función: Verificación periódica de pruebas
+async def periodic_proof_verification(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Executes periodic verification of user interactions and registers proofs.
+    """
+    print("🔄 Running periodic verification of interactions...")
+    try:
+        await verify_and_register_proofs()
+    except Exception as e:
+        print(f"❌ Error during periodic proof verification: {e}")
+
+
+# Comando: /start_proof_verification
+async def start_proof_verification(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Starts periodic proof verification (restricted to admins).
+    """
+    chat_id = update.effective_chat.id
+    user = await context.bot.get_chat_member(chat_id, update.effective_user.id)
+
+    # Verificar permisos de administrador
+    if user.status not in ["administrator", "creator"]:
+        await update.message.reply_text("❌ This command is restricted to administrators.")
+        return
+
+    # Verificar si ya hay un trabajo activo
+    if context.job_queue.get_jobs_by_name("proof_verification"):
+        await update.message.reply_text("🔄 Proof verification is already running.")
+        return
+
+    # Iniciar el trabajo periódico
+    try:
+        context.job_queue.run_repeating(periodic_proof_verification, interval=900, first=10, name="proof_verification")
+        await update.message.reply_text("✅ Proof verification has been started!")
+    except Exception as e:
+        print(f"❌ Error starting proof verification: {e}")
+        await update.message.reply_text("❌ Failed to start proof verification. Please try again.")
+
+
+# Comando: /stop_proof_verification
+async def stop_proof_verification(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Stops periodic proof verification (restricted to admins).
+    """
+    chat_id = update.effective_chat.id
+    user = await context.bot.get_chat_member(chat_id, update.effective_user.id)
+
+    # Verificar permisos de administrador
+    if user.status not in ["administrator", "creator"]:
+        await update.message.reply_text("❌ This command is restricted to administrators.")
+        return
+
+    # Detener el trabajo periódico
+    try:
+        jobs = context.job_queue.get_jobs_by_name("proof_verification")
+        for job in jobs:
+            job.schedule_removal()
+        await update.message.reply_text("✅ Proof verification has been stopped!")
+    except Exception as e:
+        print(f"❌ Error stopping proof verification: {e}")
+        await update.message.reply_text("❌ Failed to stop proof verification. Please try again.")
+
+
+----------------------------------------------------------------------------------------------------------
+
+# Configuración de seguimiento de spam y links
+user_message_count = defaultdict(list)
+mute_duration = timedelta(minutes=60)  # Duración del mute por spam
+link_mute_duration = timedelta(minutes=60)  # Duración del mute por links
+message_limit = 4  # Número máximo de mensajes permitidos en la ventana de tiempo
+time_window = timedelta(seconds=10)  # Ventana de tiempo para detección de spam
+recently_handled_users = set()  # Para evitar acciones repetitivas
+
+
+
+# Configuración de detección de raids
+new_members = []  # Lista para rastrear nuevos miembros con marcas de tiempo
+raid_detection_threshold = 5  # Número de miembros para activar detección de raids
+raid_detection_window = 30  # Ventana de tiempo en segundos para detección de raids
+raid_lock_duration = 300  # Duración del bloqueo del grupo en segundos
+
+
+# Historial de penalizaciones recientes
+recently_muted = {}  # Estructura: {user_id: datetime}
+
+# Función genérica para restringir usuarios con reintentos
+async def restrict_user_with_retry(context, chat_id, user_id, permissions, until_date):
+    try:
+        await context.bot.restrict_chat_member(
+            chat_id=chat_id,
+            user_id=user_id,
+            permissions=permissions,
+            until_date=until_date
+        )
+        print(f"✅ User {user_id} successfully restricted.")
+        return True
+    except RetryAfter as e:
+        print(f"⏳ Rate limit hit. Retrying in {e.retry_after} seconds...")
+        await asyncio.sleep(e.retry_after)
+        return await restrict_user_with_retry(context, chat_id, user_id, permissions, until_date)
+    except Exception as e:
+        print(f"❌ Failed to restrict user {user_id}: {e}")
+        return False
+
+# Función para silenciar usuarios por spam
+async def mute_user_for_spam(context, chat_id, user_id, username, duration):
+    now = datetime.now()
+
+    # Verificar si el usuario ya ha sido penalizado recientemente
+    if recently_muted.get(user_id) and (now - recently_muted[user_id]).seconds < 30:
+        print(f"⚠️ User {user_id} was recently muted. Skipping.")
+        return
+
+    recently_muted[user_id] = now  # Registrar el mute
+    try:
+        success = await restrict_user_with_retry(
+            context,
+            chat_id,
+            user_id,
+            ChatPermissions(can_send_messages=False),
+            now + duration
+        )
+        if success:
+            print(f"✅ User @{username} muted for {duration.total_seconds() / 60} minutes.")
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"❌ @{username} has been muted for spamming."
+            )
+    except Exception as e:
+        print(f"❌ Failed to mute user @{username}: {e}")
+
+# Función para detectar y manejar links y spam
+async def detect_links_and_spam(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    username = update.effective_user.username or "Unknown"
+    message_text = update.message.text or ""
+    now = datetime.now()
+
+    # Patrón para detectar links
+    link_pattern = r"(http[s]?://|www\.)[^\s]+"
+
+    # Detectar y manejar links
+    if re.search(link_pattern, message_text):
+        try:
+            await update.message.delete()
+            print(f"🔗 Link detected and deleted from user {user_id}.")
+            await mute_user_for_spam(context, chat_id, user_id, username, link_mute_duration)
+            return
+        except Exception as e:
+            print(f"❌ Error handling link for user {user_id}: {e}")
+
+    # Manejo de detección de spam
+    user_message_count[user_id].append(now)
+    user_message_count[user_id] = [
+        timestamp for timestamp in user_message_count[user_id]
+        if now - timestamp <= time_window
+    ]
+
+    if len(user_message_count[user_id]) > message_limit:
+        await mute_user_for_spam(context, chat_id, user_id, username, mute_duration)
+        # Introducir un retraso para evitar múltiples solicitudes rápidas
+        await asyncio.sleep(1)
+
+async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Maneja mensajes de texto, detectando spam y palabras largas.
+    """
+    # Detectar links y spam
+    await detect_links_and_spam(update, context)
+
+    # Detectar palabras largas sin espacios
+    await detect_long_words_and_mute(update, context)
+
+# Función para detectar palabras largas y aplicar mute progresivamente
+async def detect_long_words_and_mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Detecta palabras largas sin espacios y aplica penalización progresiva.
+    """
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    username = update.effective_user.username or "Unknown"
+    message_text = update.message.text or ""
+
+    # Excluir administradores y creadores
+    user = await context.bot.get_chat_member(chat_id, user_id)
+    if user.status in ["administrator", "creator"]:
+        return
+
+    # Patrón para detectar palabras largas (sin espacios y más de 15 caracteres)
+    long_word_pattern = r"\b\w{15,}\b"
+    long_words = re.findall(long_word_pattern, message_text)
+
+    if long_words:
+        # Inicializar o actualizar el contador de advertencias del usuario
+        if "long_word_warnings" not in context.chat_data:
+            context.chat_data["long_word_warnings"] = {}
+        warnings = context.chat_data["long_word_warnings"].get(user_id, 0)
+
+        # Determinar la duración del mute según el número de advertencias
+        if warnings >= 2:  # Tercer infracción o más
+            mute_duration = timedelta(minutes=60)
+            message = (
+                f"❌ @{username}, you have been muted for 1 hour due to repeated violations.\n"
+                f"Words detected: {', '.join(long_words)}"
+            )
+        else:  # Primera o segunda infracción
+            mute_duration = timedelta(minutes=5)
+            message = (
+                f"⚠️ @{username}, you have been muted for 5 minutes. Avoid using very long words.\n"
+                f"Words detected: {', '.join(long_words)}"
+            )
+
+        # Incrementar las advertencias del usuario
+        context.chat_data["long_word_warnings"][user_id] = warnings + 1
+
+        # Aplicar mute al usuario
+        try:
+            await context.bot.restrict_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                permissions=ChatPermissions(can_send_messages=False),
+                until_date=datetime.now() + mute_duration
+            )
+            await update.message.reply_text(message, parse_mode="HTML")
+            print(f"✅ Mute applied to @{username} for using long words: {', '.join(long_words)}.")
+        except Exception as e:
+            print(f"❌ Failed to mute user @{username}: {e}")
+
+
+
+-------------------------------------------------------------------------------------------------------------------
+
+# Configuración de seguimiento de spam y links
+user_message_count = defaultdict(list)
+mute_duration = timedelta(minutes=60)  # Duración del mute por spam
+link_mute_duration = timedelta(minutes=60)  # Duración del mute por links
+message_limit = 4  # Número máximo de mensajes permitidos en la ventana de tiempo
+time_window = timedelta(seconds=10)  # Ventana de tiempo para detección de spam
+recently_handled_users = {}  # Estructura: {user_id: datetime}
+
+# Configuración de detección de raids
+new_members = []  # Lista para rastrear nuevos miembros con marcas de tiempo
+raid_detection_threshold = 5  # Número de miembros para activar detección de raids
+raid_detection_window = 30  # Ventana de tiempo en segundos para detección de raids
+raid_lock_duration = 300  # Duración del bloqueo del grupo en segundos
+
+# Función genérica para restringir usuarios con reintentos
+async def restrict_user_with_retry(context, chat_id, user_id, permissions, until_date):
+    try:
+        await context.bot.restrict_chat_member(
+            chat_id=chat_id,
+            user_id=user_id,
+            permissions=permissions,
+            until_date=until_date
+        )
+        print(f"✅ User {user_id} successfully restricted.")
+        return True
+    except RetryAfter as e:
+        print(f"⏳ Rate limit hit. Retrying in {e.retry_after} seconds...")
+        await asyncio.sleep(e.retry_after)
+        return await restrict_user_with_retry(context, chat_id, user_id, permissions, until_date)
+    except Exception as e:
+        print(f"❌ Failed to restrict user {user_id}: {e}")
+        return False
+
+# Función para silenciar usuarios
+async def mute_user(context, chat_id, user_id, username, duration, reason):
+    now = datetime.now(timezone.utc)  # Usar timezone-aware UTC
+
+    # Verificar si el usuario ya ha sido manejado recientemente
+    if user_id in recently_handled_users and (now - recently_handled_users[user_id]).seconds < 30:
+        print(f"⚠️ User {user_id} was recently handled. Skipping.")
+        return
+
+    recently_handled_users[user_id] = now  # Registrar acción
+    try:
+        success = await restrict_user_with_retry(
+            context,
+            chat_id,
+            user_id,
+            ChatPermissions(can_send_messages=False),
+            now + duration
+        )
+        if success:
+            print(f"✅ User @{username} muted for {duration.total_seconds() / 60:.0f} minutes ({reason}).")
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"❌ @{username} has been muted for {duration.total_seconds() / 60:.0f} minutes.\nReason: {reason}."
+            )
+    except Exception as e:
+        print(f"❌ Failed to mute user @{username}: {e}")
+
+# Detectar y manejar links y spam
+async def detect_links_and_spam(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    username = update.effective_user.username or "Unknown"
+
+    # Verificar si hay un mensaje
+    if not update.message or not update.message.text:
+        print(f"⚠️ Update without a valid message detected from user {user_id}. Ignoring.")
+        return
+
+    message_text = update.message.text  # Extraer el texto del mensaje
+    now = datetime.utcnow()
+
+    # Patrón para detectar links
+    link_pattern = r"(http[s]?://|www\.)[^\s]+"
+
+    # Detectar y manejar links
+    if re.search(link_pattern, message_text):
+        try:
+            await update.message.delete()
+            print(f"🔗 Link detected and deleted from user {user_id}.")
+            await mute_user(context, chat_id, user_id, username, link_mute_duration, "Posting links")
+            return
+        except Exception as e:
+            print(f"❌ Error handling link for user {user_id}: {e}")
+
+    # Manejo de detección de spam
+    user_message_count[user_id].append(now)
+    user_message_count[user_id] = [
+        timestamp for timestamp in user_message_count[user_id]
+        if now - timestamp <= time_window
+    ]
+
+    if len(user_message_count[user_id]) > message_limit:
+        await mute_user(context, chat_id, user_id, username, mute_duration, "Spamming")
+
+
+    # Manejo de detección de spam
+    user_message_count[user_id].append(now)
+    user_message_count[user_id] = [
+        timestamp for timestamp in user_message_count[user_id]
+        if now - timestamp <= time_window
+    ]
+
+    if len(user_message_count[user_id]) > message_limit:
+        await mute_user(context, chat_id, user_id, username, mute_duration, "Spamming")
+
+# Detectar palabras largas y aplicar mute progresivo
+async def detect_long_words_and_mute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    username = update.effective_user.username or "Unknown"
+    message_text = update.message.text or ""
+
+    # Excluir administradores y creadores
+    user = await context.bot.get_chat_member(chat_id, user_id)
+    if user.status in ["administrator", "creator"]:
+        return
+
+    # Detectar palabras largas
+    long_word_pattern = r"\b\w{15,}\b"
+    long_words = re.findall(long_word_pattern, message_text)
+
+    if long_words:
+        # Inicializar advertencias
+        if "long_word_warnings" not in context.chat_data:
+            context.chat_data["long_word_warnings"] = {}
+
+        warnings = context.chat_data["long_word_warnings"].get(user_id, 0)
+        context.chat_data["long_word_warnings"][user_id] = warnings + 1
+
+        # Determinar duración del mute
+        mute_duration = timedelta(minutes=60) if warnings >= 2 else timedelta(minutes=5)
+        reason = f"Using long words: {', '.join(long_words)}"
+        message = (
+            f"❌ @{username}, you have been muted for {mute_duration.total_seconds() / 60:.0f} minutes.\n"
+            f"Reason: {reason}"
+        )
+
+        # Aplicar mute
+        try:
+            await restrict_user_with_retry(
+                context,
+                chat_id,
+                user_id,
+                ChatPermissions(can_send_messages=False),
+                datetime.now(timezone.utc) + mute_duration
+            )
+            await update.message.reply_text(message, parse_mode="HTML")
+            print(f"✅ Mute applied to @{username} for {reason}.")
+        except Exception as e:
+            print(f"❌ Failed to mute user @{username}: {e}")
+
+# Manejar mensajes de texto
+async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await detect_links_and_spam(update, context)
+    await detect_long_words_and_mute(update, context)
+
+
+# Función para manejar nuevos miembros y detectar raids
+async def handle_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    new_member_id = update.effective_user.id
+    now = datetime.now()
+
+    # Agregar nuevo miembro a la lista con marca de tiempo
+    new_members.append({"id": new_member_id, "timestamp": now})
+
+    # Limpiar entradas antiguas fuera de la ventana de detección
+    new_members[:] = [
+        member for member in new_members
+        if (now - member["timestamp"]).seconds <= raid_detection_window
+    ]
+
+    # Verificar si el número de nuevos miembros supera el umbral
+    if len(new_members) > raid_detection_threshold:
+        # Notificar al grupo
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="🚨 Raid detected! Temporarily locking the group to prevent spam."
+        )
+
+        # Bloquear el grupo
+        try:
+            await context.bot.set_chat_permissions(
+                chat_id=chat_id,
+                permissions=ChatPermissions(can_send_messages=False)
+            )
+            print(f"🚨 Group {chat_id} locked due to raid detection.")
+        except Exception as e:
+            print(f"❌ Failed to lock group {chat_id}: {e}")
+
+        # Notificar a los administradores
+        try:
+            admins = await context.bot.get_chat_administrators(chat_id)
+            for admin in admins:
+                if not admin.user.is_bot:
+                    await asyncio.sleep(0.5)  # Prevenir límites de mensajes de Telegram
+                    await context.bot.send_message(
+                        chat_id=admin.user.id,
+                        text=(
+                            f"🚨 Raid detected in group {chat_id}. The group is temporarily locked "
+                            f"for {raid_lock_duration // 60} minutes."
+                        )
+                    )
+        except Exception as e:
+            print(f"❌ Error notifying admins: {e}")
+
+        # Esperar la duración del bloqueo
+        await asyncio.sleep(raid_lock_duration)
+
+        # Desbloquear el grupo
+        try:
+            await context.bot.set_chat_permissions(
+                chat_id=chat_id,
+                permissions=ChatPermissions(can_send_messages=True)
+            )
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="✅ Group unlocked. Stay safe!"
+            )
+            print(f"✅ Group {chat_id} unlocked after raid lock.")
+        except Exception as e:
+            print(f"❌ Failed to unlock group {chat_id}: {e}")
+
+
