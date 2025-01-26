@@ -83,6 +83,7 @@ else:
 # Initialize SQLite database
 from sqlite3 import Connection, Cursor
 from pathlib import Path
+import sqlite3
 import requests
 import time
 
@@ -155,6 +156,20 @@ CREATE TABLE IF NOT EXISTS proofs (
 );
 """)
 
+# Create table for sponsored coins
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS sponsored_coins (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    price REAL NOT NULL,
+    market_cap REAL NOT NULL,
+    url TEXT NOT NULL,
+    author TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+""")
+
 # Migrate data from the old "raids" table if it exists
 cursor.execute("""
 SELECT name FROM sqlite_master WHERE type='table' AND name='raids_old';
@@ -187,6 +202,126 @@ CREATE TABLE IF NOT EXISTS participants (
 conn.commit()
 print("✅ Database schema and tables created/updated successfully!")
 
+# Functions for sponsored coins management
+
+def add_sponsored_coin(name, symbol, price, market_cap, url, author):
+    """
+    Adds a new sponsored coin to the database.
+    """
+    try:
+        cursor.execute("""
+        INSERT INTO sponsored_coins (name, symbol, price, market_cap, url, author)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, (name, symbol, price, market_cap, url, author))
+        conn.commit()
+        print(f"✅ Sponsored coin added: {name} ({symbol})")
+    except Exception as e:
+        print(f"❌ Error adding sponsored coin: {e}")
+
+def edit_sponsored_coin(name, new_symbol, new_price, new_market_cap, new_url, new_author):
+    """
+    Edits an existing sponsored coin in the database.
+    """
+    try:
+        cursor.execute("""
+        UPDATE sponsored_coins
+        SET symbol = ?, price = ?, market_cap = ?, url = ?, author = ?
+        WHERE name = ?
+        """, (new_symbol, new_price, new_market_cap, new_url, new_author, name))
+        conn.commit()
+        if cursor.rowcount == 0:
+            print(f"⚠️ No sponsored coin found with the name '{name}'.")
+        else:
+            print(f"✅ Sponsored coin updated: {name}")
+    except Exception as e:
+        print(f"❌ Error editing sponsored coin: {e}")
+
+def remove_sponsored_coin(name):
+    """
+    Removes a sponsored coin from the database by name.
+    """
+    try:
+        cursor.execute("DELETE FROM sponsored_coins WHERE name = ?", (name,))
+        conn.commit()
+        if cursor.rowcount == 0:
+            print(f"⚠️ No sponsored coin found with the name '{name}'.")
+        else:
+            print(f"✅ Sponsored coin removed: {name}")
+    except Exception as e:
+        print(f"❌ Error removing sponsored coin: {e}")
+
+def get_all_sponsored_coins():
+    """
+    Fetches all sponsored coins from the database.
+    """
+    try:
+        cursor.execute("SELECT name, symbol, price, market_cap, url FROM sponsored_coins")
+        coins = cursor.fetchall()
+        return [{"name": coin[0], "symbol": coin[1], "price": coin[2], "market_cap": coin[3], "url": coin[4]} for coin in coins]
+    except Exception as e:
+        print(f"❌ Error fetching sponsored coins: {e}")
+        return []
+
+from telegram import Update
+from telegram.ext import ContextTypes
+
+async def add_sponsored_coin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handler for adding a new sponsored coin.
+    Command format: /add_sponsored_coin <name> <symbol> <price> <market_cap> <url> <author>
+    """
+    try:
+        if len(context.args) < 6:
+            await update.message.reply_text("❌ Usage: /add_sponsored_coin <name> <symbol> <price> <market_cap> <url> <author>")
+            return
+
+        name, symbol, price, market_cap, url, author = context.args
+        price = float(price)
+        market_cap = float(market_cap)
+
+        add_sponsored_coin(name, symbol, price, market_cap, url, author)
+        await update.message.reply_text(f"✅ Sponsored coin '{name}' added successfully!")
+    except ValueError:
+        await update.message.reply_text("❌ Invalid price or market cap format. Please enter numeric values.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+
+async def edit_sponsored_coin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handler for editing an existing sponsored coin.
+    Command format: /edit_sponsored_coin <name> <new_symbol> <new_price> <new_market_cap> <new_url> <new_author>
+    """
+    try:
+        if len(context.args) < 6:
+            await update.message.reply_text("❌ Usage: /edit_sponsored_coin <name> <new_symbol> <new_price> <new_market_cap> <new_url> <new_author>")
+            return
+
+        name, new_symbol, new_price, new_market_cap, new_url, new_author = context.args
+        new_price = float(new_price)
+        new_market_cap = float(new_market_cap)
+
+        edit_sponsored_coin(name, new_symbol, new_price, new_market_cap, new_url, new_author)
+        await update.message.reply_text(f"✅ Sponsored coin '{name}' updated successfully!")
+    except ValueError:
+        await update.message.reply_text("❌ Invalid price or market cap format. Please enter numeric values.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+
+async def remove_sponsored_coin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handler for removing a sponsored coin.
+    Command format: /remove_sponsored_coin <name>
+    """
+    try:
+        if len(context.args) < 1:
+            await update.message.reply_text("❌ Usage: /remove_sponsored_coin <name>")
+            return
+
+        name = context.args[0]
+        remove_sponsored_coin(name)
+        await update.message.reply_text(f"✅ Sponsored coin '{name}' removed successfully!")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
 
 
 
@@ -1225,6 +1360,12 @@ async def verify_and_register_proofs():
         await asyncio.sleep(60)  # Respetar los límites de la API
 
 
+
+
+
+
+
+
 # Function to welcome new members
 async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -1233,7 +1374,7 @@ async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
     chat_id = update.effective_chat.id
 
     for member in update.message.new_chat_members:
-        # Create button menu with "Web Site" pointing to the desired URL
+        # Create button menu
         keyboard = [
             [
                 InlineKeyboardButton("🌐 Web Site", url="https://www.gorillamansion.xyz/"),
@@ -1243,7 +1384,10 @@ async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 InlineKeyboardButton("🎯 Raid Help", callback_data="help_raids"),
                 InlineKeyboardButton("📊 Top Cryptos", callback_data="top_cryptos"),
             ],
-            [InlineKeyboardButton("ℹ️ About the Bot", callback_data="about_bot")],
+            [
+                InlineKeyboardButton("ℹ️ About the Bot", callback_data="about_bot"),
+                InlineKeyboardButton("🎮 Play Games", url="https://t.me/gorillagamblin_bot?start=start_games"),
+            ],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -1251,15 +1395,18 @@ async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
         try:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=(
-                    f"👋 Welcome, {member.full_name}!\n\n"
-                    "Explore the bot's features using the options below."
-                ),
+                text=(f"👋 Welcome, {member.full_name}!\n\nExplore the bot's features using the options below."),
                 reply_markup=reply_markup,
                 parse_mode="HTML",
             )
         except Exception as e:
             print(f"❌ Failed to welcome user {member.full_name}: {e}")
+
+
+
+
+
+
 
 
 # Respond to the selected button
@@ -1345,6 +1492,26 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(f"❌ Error sending start menu: {e}")
         await update.message.reply_text("❌ An error occurred while sending the start menu.")
+
+
+
+
+
+
+# Handler for /start_games command
+async def start_games_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handles the /start_games command in the group.
+    """
+    try:
+        chat_id = update.effective_chat.id
+        await context.bot.send_message(chat_id=chat_id, text="🎮 The games are starting! Get ready...")
+    except Exception as e:
+        logger.error(f"❌ Error in start_games_handler: {e}")
+        await update.message.reply_text("❌ An error occurred while starting the games.")
+
+
+
 
 
 
@@ -1499,45 +1666,213 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 
-# Function to get the top 5 cryptocurrencies
+
+
+
+
+# Function to get cryptocurrencies with filters for top categories or specific symbols
 async def get_top_cryptos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Fetches and displays the top 5 cryptocurrencies by market cap.
+    Fetches and displays cryptocurrencies. Supports categories like 'memes' or specific symbols.
     """
-    url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest"
+    url_listings = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest"
+    url_categories = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/categories"
     headers = {
         "Accepts": "application/json",
         "X-CMC_PRO_API_KEY": COINMARKETCAP_API_KEY,
     }
-    params = {"start": "1", "limit": "5", "convert": "USD"}
+
     try:
-        response = requests.get(url, headers=headers, params=params)
+        # Verificar si se pasa "memes" como categoría
+        if context.args and context.args[0].lower() == "memes":
+            # Llamar a la API de categorías
+            response = requests.get(url_categories, headers=headers)
+            response.raise_for_status()
+            categories = response.json().get("data", [])
+
+            # Buscar la categoría 'memes'
+            meme_category = next((cat for cat in categories if "meme" in cat["name"].lower()), None)
+            if not meme_category:
+                await update.message.reply_text("❌ Meme category not found.")
+                return
+
+            # Obtener las monedas de la categoría 'memes'
+            meme_coins = meme_category.get("top_10_coins", [])
+            if not meme_coins:
+                await update.message.reply_text("❌ No meme coins found.")
+                return
+
+            # Construir el mensaje
+            message = "<b>📊 Top Meme Coins:</b>\n\n"
+            for coin in meme_coins:
+                message += f"• <b>{coin['name']} ({coin['symbol']})</b>\n"
+
+            await update.message.reply_text(message, parse_mode="HTML")
+            return
+
+        # Si se pasan símbolos específicos (BTC ETH DOGE)
+        elif context.args:
+            symbols = ",".join(context.args).upper()
+            params = {"symbol": symbols, "convert": "USD"}
+            response = requests.get(url_listings, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json().get("data", [])
+
+            if not data:
+                await update.message.reply_text("❌ No data found for the specified symbols.")
+                return
+
+            message = "<b>📊 Selected Cryptocurrencies:</b>\n\n"
+            for crypto in data:
+                message += (
+                    f"• <b>{crypto['name']} ({crypto['symbol']})</b>: "
+                    f"${crypto['quote']['USD']['price']:.2f}\n"
+                )
+
+            await update.message.reply_text(message, parse_mode="HTML")
+            return
+
+        # Si no hay argumentos, mostrar el top 5 general
+        params = {"start": "1", "limit": "5", "convert": "USD"}
+        response = requests.get(url_listings, headers=headers, params=params)
         response.raise_for_status()
-        data = response.json()
-        cryptos = data.get("data", [])
-        if not cryptos:
+        data = response.json().get("data", [])
+
+        if not data:
             raise ValueError("No cryptocurrency data found.")
 
-        # Create the message in HTML format
         message = "<b>📊 Top 5 Cryptocurrencies:</b>\n\n"
-        for crypto in cryptos:
+        for crypto in data:
             message += (
                 f"• <b>{crypto['name']} ({crypto['symbol']})</b>: "
                 f"${crypto['quote']['USD']['price']:.2f}\n"
             )
 
-        # Send the message
         await update.message.reply_text(message, parse_mode="HTML")
+
     except requests.exceptions.RequestException as e:
         print(f"❌ Error fetching cryptocurrency data: {e}")
-        await update.message.reply_text(
-            "❌ Failed to fetch cryptocurrency data. Please try again later."
-        )
+        await update.message.reply_text("❌ Failed to fetch cryptocurrency data. Please try again later.")
     except Exception as e:
         print(f"❌ Unexpected error: {e}")
+        await update.message.reply_text("❌ An error occurred while processing the cryptocurrency data.")
+
+
+# Function to get top meme coins with updated button layout
+async def get_top_meme_coins(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Fetches and displays top meme coins using the CoinMarketCap API.
+    If specific symbols are provided as arguments, includes them and displays them first with proper spacing.
+    Monetization options with updated button layout.
+    """
+    url_categories = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/categories"
+    url_category = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/category"
+    url_quotes = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
+    headers = {
+        "Accepts": "application/json",
+        "X-CMC_PRO_API_KEY": COINMARKETCAP_API_KEY,
+    }
+    try:
+        # Create the message
+        message = "<b>📊 Meme Coins Overview:</b>\n\n"
+
+        # Step 1: Fetch sponsored coins from the database
+        sponsored_coins = get_all_sponsored_coins()
+        if sponsored_coins:
+            message += "<b>📋 <u>Sponsored Meme Coins</u>:</b>\n\n"
+            for coin in sponsored_coins:
+                name = coin.get("name", "Unknown")
+                symbol = coin.get("symbol", "Unknown")
+                price = coin.get("price", "N/A")
+                market_cap = coin.get("market_cap", "N/A")
+                url = coin.get("url", "#")
+
+                # Format price and market cap safely
+                price_str = f"${price:,.2f}" if isinstance(price, (int, float)) else "N/A"
+                market_cap_str = f"${market_cap:,.0f}" if isinstance(market_cap, (int, float)) else "N/A"
+
+                message += (
+                    f"⭐ <b>{name} ({symbol})</b>\n"
+                    f"   💵 <i>Price:</i> <b>{price_str}</b>\n"
+                    f"   💰 <i>Market Cap:</i> <b>{market_cap_str}</b>\n"
+                    f"   🔗 <a href='{url}'>Visit Website</a>\n\n"
+                )
+
+        # Separator between sponsored and top coins
+        if sponsored_coins:
+            message += "<b>──────────────────────────────</b>\n\n"
+
+        # Step 2: Fetch top meme coins dynamically from CoinMarketCap
+        response = requests.get(url_categories, headers=headers)
+        response.raise_for_status()
+        categories = response.json().get("data", [])
+
+        # Find "meme coins" category
+        meme_category = next((cat for cat in categories if "meme" in cat["name"].lower()), None)
+        if not meme_category:
+            await update.message.reply_text("❌ Meme coins category not found in CoinMarketCap API.")
+            return
+
+        # Fetch cryptocurrencies under the "meme coins" category
+        category_identifier = meme_category.get("id")
+        if not category_identifier:
+            await update.message.reply_text("❌ Unable to identify the Meme Coins category.")
+            return
+
+        response = requests.get(url_category, headers=headers, params={"id": category_identifier})
+        response.raise_for_status()
+        meme_coins = response.json().get("data", {}).get("coins", [])
+
+        if not meme_coins:
+            await update.message.reply_text("❌ No meme coins found in the category.")
+            return
+
+        # Step 3: Add the top 5 meme coins
+        message += "🎯 <b><u>Top 5 Meme Coins</u>:</b>\n\n"
+        for coin in meme_coins[:5]:  # Limit to top 5 coins
+            name = coin.get("name", "Unknown")
+            symbol = coin.get("symbol", "Unknown")
+            price = coin.get("quote", {}).get("USD", {}).get("price", "N/A")
+            market_cap = coin.get("quote", {}).get("USD", {}).get("market_cap", "N/A")
+
+            # Format price and market cap safely
+            price_str = f"${price:,.6f}" if isinstance(price, (int, float)) else "N/A"
+            market_cap_str = f"${market_cap:,.0f}" if isinstance(market_cap, (int, float)) else "N/A"
+
+            message += (
+                f"• <b>{name} ({symbol})</b>\n"
+                f"   💵 <i>Price:</i> {price_str}\n"
+                f"   💰 <i>Market Cap:</i> {market_cap_str}\n\n"
+            )
+
+        # Inline keyboard with updated layout
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Get Detailed Data 📊", url="https://your-link.com/detailed-data"),
+             InlineKeyboardButton("Advertise Here 🛠️", url="https://your-link.com/advertise")],
+            [InlineKeyboardButton("Save My List 📜", url="https://your-link.com/save-list"),
+             InlineKeyboardButton("Support the Bot 🙌", url="https://your-link.com/donate")],
+            [InlineKeyboardButton("Promote Your Coin 💰", url="https://your-link.com/promote")]
+        ])
+
+        # Send the message with buttons
+        await update.message.reply_text(message.strip(), parse_mode="HTML", reply_markup=keyboard)
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Error fetching meme coins: {e}")
         await update.message.reply_text(
-            "❌ An error occurred while processing the cryptocurrency data."
+            "❌ Failed to fetch meme coins. Please try again later."
         )
+    except Exception as e:
+        logger.error(f"❌ Unexpected error: {e}")
+        await update.message.reply_text(
+            "❌ An error occurred while processing meme coins data."
+        )
+
+
+
+
+
+
 
 
 # Function to post a random crypto phrase
@@ -1637,6 +1972,11 @@ if __name__ == "__main__":
                 command_handlers = [
                     CommandHandler("start", start),
                     CommandHandler("top_cryptos", get_top_cryptos),
+                    CommandHandler("top_meme_coins", get_top_meme_coins),
+                    CommandHandler("start_games", start_games_handler),
+                    CommandHandler("add_sponsored_coin", add_sponsored_coin_handler),  # Nuevo comando
+                    CommandHandler("edit_sponsored_coin", edit_sponsored_coin_handler),  # Nuevo comando
+                    CommandHandler("remove_sponsored_coin", remove_sponsored_coin_handler),  # Nuevo comando
                     CommandHandler("start_auto_posts", start_auto_posts),
                     CommandHandler("stop_auto_posts", stop_auto_posts),
                     CommandHandler("new_raid", new_raid),
